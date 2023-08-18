@@ -297,6 +297,7 @@ func main() {
 	wrmem := flag.Bool("wrmem", false, "only show instructions that write to memory")
 	atomic := flag.Bool("atomic", false, "only show atomic instructions")
 	nomodify := flag.Bool("nomodify", false, "only show instructions that do not modify any general-purpose registers")
+	encoding := flag.Bool("encoding", false, "show instruction encodings")
 
 	flag.Parse()
 	args := flag.Args()
@@ -336,6 +337,12 @@ func main() {
 				}
 
 				fmt.Printf("%s: %s\n", filepath.Base(path), insn.Names())
+
+				if *encoding {
+					for _, c := range insn.Classes.IClass {
+						fmt.Printf("\t%s: %s\n", c.Id, c.RegDiagram)
+					}
+				}
 			}
 		}
 		return nil
