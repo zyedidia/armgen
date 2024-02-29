@@ -236,6 +236,44 @@ func (is InsnSection) BaseVariant() bool {
 	return true
 }
 
+func (is InsnSection) Variant(version string) bool {
+	for _, c := range is.Classes.IClass {
+		for _, v := range c.ArchVariants.Variants {
+			if v.Name == version {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (is InsnSection) VariantLE(version string) bool {
+	for _, c := range is.Classes.IClass {
+		if len(c.ArchVariants.Variants) == 0 {
+			return true
+		}
+		for _, v := range c.ArchVariants.Variants {
+			if strings.Compare(v.Name, version) <= 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (is InsnSection) HasClass(class string) bool {
+	iclass := "iclass_" + class
+	for _, c := range is.Classes.IClass {
+		if iclass == c.Id {
+			return true
+		}
+	}
+	if is.Docs.InstrClass() != "" && is.Docs.InstrClass() == class {
+		return true
+	}
+	return false
+}
+
 func (is InsnSection) BaseArch() bool {
 	if !strings.Contains(InstrBase, is.Docs.InstrClass()) {
 		return false
@@ -298,9 +336,18 @@ func main() {
 	atomic := flag.Bool("atomic", false, "only show atomic instructions")
 	nomodify := flag.Bool("nomodify", false, "only show instructions that do not modify any general-purpose registers")
 	encoding := flag.Bool("encoding", false, "show instruction encodings")
+	rust := flag.String("func", "", "generate rust function with name")
+	variant := flag.String("variant", "", "ISA version")
+
+	total := 0
 
 	flag.Parse()
 	args := flag.Args()
+
+	if *rust != "" {
+		fmt.Printf("pub fn %s(op: Op) -> bool {\n", *rust)
+		fmt.Printf("\tmatch op {\n")
+	}
 
 	filepath.WalkDir(args[0], func(path string, insn fs.DirEntry, err error) error {
 		if insn != nil && !insn.IsDir() && strings.HasSuffix(path, ".xml") {
@@ -317,7 +364,13 @@ func main() {
 				if *base && !insn.BaseVariant() {
 					return nil
 				}
-				if !strings.Contains(*classes, insn.Docs.InstrClass()) {
+				hasclass := false
+				for _, class := range strings.Split(*classes, ",") {
+					if insn.HasClass(class) {
+						hasclass = true
+					}
+				}
+				if !hasclass {
 					return nil
 				}
 				if *branch && !insn.IsBranch() {
@@ -335,8 +388,23 @@ func main() {
 				if *nomodify && len(insn.WriteSet()) != 0 {
 					return nil
 				}
+				if *variant != "" && !insn.VariantLE(*variant) {
+					return nil
+				}
 
-				fmt.Printf("%s: %s\n", filepath.Base(path), insn.Names())
+				if *rust != "" {
+					if filepath.Base(path) == "b_cond.xml" {
+						fmt.Printf(condbranches)
+					} else {
+						for _, n := range insn.Names() {
+							fmt.Printf("\t\tOp::%s => true,\n", n)
+						}
+					}
+				} else {
+					fmt.Printf("%s: %s\n", filepath.Base(path), insn.Names())
+				}
+
+				total += len(insn.Names())
 
 				if *encoding {
 					for _, c := range insn.Classes.IClass {
@@ -347,4 +415,29 @@ func main() {
 		}
 		return nil
 	})
+
+	if *rust != "" {
+		fmt.Printf("\t\t_ => false,\n")
+		fmt.Printf("\t}\n}\n\n")
+	} else {
+		fmt.Printf("total instructions: %d\n", total)
+	}
 }
+
+var condbranches = `		Op::B_AL => true,
+		Op::B_CC => true,
+		Op::B_CS => true,
+		Op::B_EQ => true,
+		Op::B_GE => true,
+		Op::B_GT => true,
+		Op::B_HI => true,
+		Op::B_LE => true,
+		Op::B_LS => true,
+		Op::B_LT => true,
+		Op::B_MI => true,
+		Op::B_NE => true,
+		Op::B_NV => true,
+		Op::B_PL => true,
+		Op::B_VC => true,
+		Op::B_VS => true,
+`
