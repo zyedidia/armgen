@@ -43,6 +43,15 @@ type DocVars struct {
 	Vars    []DocVar `xml:"docvar"`
 }
 
+func (d DocVars) AliasMnemonic() string {
+	for _, v := range d.Vars {
+		if v.Key == "alias_mnemonic" {
+			return v.Val
+		}
+	}
+	return ""
+}
+
 func (d DocVars) Mnemonic() string {
 	for _, v := range d.Vars {
 		if v.Key == "mnemonic" {
@@ -318,6 +327,10 @@ func (is InsnSection) Names() []string {
 	for _, c := range is.Classes.IClass {
 		for _, e := range c.Encodings {
 			set[e.Docs.Mnemonic()] = true
+			alias := e.Docs.AliasMnemonic()
+			if alias != "" {
+				set[e.Docs.AliasMnemonic()] = true
+			}
 		}
 	}
 	var names []string
@@ -345,10 +358,12 @@ func main() {
 	args := flag.Args()
 
 	if *rust != "" {
+		fmt.Print("// AUTO-GENERATED FILE: DO NOT EDIT\n")
 		fmt.Printf("pub fn %s(op: Op) -> bool {\n", *rust)
 		fmt.Printf("\tmatch op {\n")
 	}
 
+	names := make(map[string]bool)
 	filepath.WalkDir(args[0], func(path string, insn fs.DirEntry, err error) error {
 		if insn != nil && !insn.IsDir() && strings.HasSuffix(path, ".xml") {
 			data, err := os.ReadFile(path)
@@ -360,7 +375,7 @@ func main() {
 				return nil
 			}
 
-			if insn.Type == "instruction" {
+			if insn.Type == "instruction" || insn.Type == "alias" {
 				if *base && !insn.BaseVariant() {
 					return nil
 				}
@@ -394,10 +409,13 @@ func main() {
 
 				if *rust != "" {
 					if filepath.Base(path) == "b_cond.xml" {
-						fmt.Printf(condbranches)
+						fmt.Print(condbranches)
 					} else {
 						for _, n := range insn.Names() {
-							fmt.Printf("\t\tOp::%s => true,\n", n)
+							if !names[n] {
+								fmt.Printf("\t\tOp::%s => true,\n", n)
+								names[n] = true
+							}
 						}
 					}
 				} else {
