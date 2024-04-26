@@ -345,10 +345,14 @@ func main() {
 	args := flag.Args()
 
 	if *rust != "" {
-		fmt.Printf("pub fn %s(op: Op) -> bool {\n", *rust)
-		fmt.Printf("\tmatch op {\n")
+		fmt.Print("// AUTO-GENERATED FILE: DO NOT EDIT\n")
+		fmt.Print("#pragma once\n")
+		fmt.Print("#include <capstone/capstone.h>\n")
+		fmt.Printf("static bool %s(aarch64_insn insn) {\n", *rust)
+		fmt.Printf("\tswitch (insn) {\n")
 	}
 
+	names := make(map[string]bool)
 	filepath.WalkDir(args[0], func(path string, insn fs.DirEntry, err error) error {
 		if insn != nil && !insn.IsDir() && strings.HasSuffix(path, ".xml") {
 			data, err := os.ReadFile(path)
@@ -393,13 +397,29 @@ func main() {
 				}
 
 				if *rust != "" {
-					if filepath.Base(path) == "b_cond.xml" {
-						fmt.Printf(condbranches)
-					} else {
-						for _, n := range insn.Names() {
-							fmt.Printf("\t\tOp::%s => true,\n", n)
+					for _, n := range insn.Names() {
+						switch n {
+						case "ASRV":
+							n = "ASR"
+						case "LSLV":
+							n = "LSL"
+						case "LSRV":
+							n = "LSR"
+						case "RORV":
+							n = "ROR"
+						}
+						if !names[n] {
+							fmt.Printf("\t\tcase AArch64_INS_%s:\n", n)
+							names[n] = true
 						}
 					}
+					// if filepath.Base(path) == "b_cond.xml" {
+					// 	fmt.Printf(condbranches)
+					// } else {
+					// 	for _, n := range insn.Names() {
+					// 		fmt.Printf("\t\tOp::%s => true,\n", n)
+					// 	}
+					// }
 				} else {
 					fmt.Printf("%s: %s\n", filepath.Base(path), insn.Names())
 				}
@@ -417,7 +437,8 @@ func main() {
 	})
 
 	if *rust != "" {
-		fmt.Printf("\t\t_ => false,\n")
+		fmt.Printf("\t\treturn true;\n")
+		fmt.Printf("\t\tdefault: return false;\n")
 		fmt.Printf("\t}\n}\n\n")
 	} else {
 		fmt.Printf("total instructions: %d\n", total)
