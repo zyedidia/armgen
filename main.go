@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"flag"
 	"fmt"
@@ -97,6 +98,22 @@ type ArchVariants struct {
 	Variants []ArchVariant `xml:"arch_variant"`
 }
 
+func (a ArchVariants) GetVariants() []string {
+	var vars []string
+	for _, v := range a.Variants {
+		vars = append(vars, v.Name)
+	}
+	return vars
+}
+
+func (a ArchVariants) GetFeatures() []string {
+	var feats []string
+	for _, v := range a.Variants {
+		feats = append(feats, v.Feature)
+	}
+	return feats
+}
+
 type BitC struct {
 	XMLName xml.Name `xml:"c"`
 	Cols    int      `xml:"colspan,attr"`
@@ -104,9 +121,10 @@ type BitC struct {
 }
 
 type Box struct {
-	XMLName xml.Name `xml:"box"`
-	Bits    []BitC   `xml:"c"`
-	Name    string   `xml:"name,attr"`
+	XMLName    xml.Name `xml:"box"`
+	Bits       []BitC   `xml:"c"`
+	Name       string   `xml:"name,attr"`
+	Constraint string   `xml:"constraint,attr"`
 }
 
 type RegDiagram struct {
@@ -119,7 +137,13 @@ func (r RegDiagram) String() string {
 	b := &bytes.Buffer{}
 	for i, box := range r.Boxes {
 		if box.Name != "" {
-			fmt.Fprintf(b, "%s=", box.Name)
+			fmt.Fprint(b, box.Name)
+		}
+		if box.Constraint != "" {
+			fmt.Fprint(b, strings.ReplaceAll(box.Constraint, " ", ""), "|")
+			continue
+		} else if box.Name != "" {
+			fmt.Fprint(b, "=")
 		}
 		for _, bit := range box.Bits {
 			if bit.Value == "" {
@@ -128,6 +152,8 @@ func (r RegDiagram) String() string {
 			if bit.Cols == 0 {
 				bit.Cols = 1
 			}
+			bit.Value = strings.ReplaceAll(bit.Value, "(1)", "1")
+			bit.Value = strings.ReplaceAll(bit.Value, "(0)", "0")
 			fmt.Fprint(b, strings.Repeat(bit.Value, bit.Cols))
 		}
 		if i != len(r.Boxes)-1 {
@@ -139,6 +165,7 @@ func (r RegDiagram) String() string {
 
 type Encoding struct {
 	XMLName xml.Name `xml:"encoding"`
+	Name    string   `xml:"name,attr"`
 	Docs    DocVars  `xml:"docvars"`
 }
 
@@ -150,6 +177,7 @@ type IClass struct {
 	ArchVariants ArchVariants `xml:"arch_variants"`
 	Code         PsSection    `xml:"ps_section"`
 	Encodings    []Encoding   `xml:"encoding"`
+	Docs         DocVars      `xml:"docvars"`
 }
 
 type Classes struct {
@@ -271,9 +299,11 @@ func (is InsnSection) VariantLE(version string) bool {
 }
 
 func (is InsnSection) HasClass(class string) bool {
-	iclass := "iclass_" + class
+	if class == "all" {
+		return true
+	}
 	for _, c := range is.Classes.IClass {
-		if iclass == c.Id {
+		if c.Docs.InstrClass() == class {
 			return true
 		}
 	}
@@ -281,6 +311,23 @@ func (is InsnSection) HasClass(class string) bool {
 		return true
 	}
 	return false
+}
+
+func (is InsnSection) GetClasses() []string {
+	m := make(map[string]bool)
+	for _, c := range is.Classes.IClass {
+		if c.Docs.InstrClass() != "" {
+			m[c.Docs.InstrClass()] = true
+		}
+	}
+	if is.Docs.InstrClass() != "" {
+		m[is.Docs.InstrClass()] = true
+	}
+	var classes []string
+	for k := range m {
+		classes = append(classes, k)
+	}
+	return classes
 }
 
 func (is InsnSection) BaseArch() bool {
@@ -340,6 +387,42 @@ func (is InsnSection) Names() []string {
 	return names
 }
 
+type Record struct {
+	File       string
+	Name       string
+	IClass     string
+	Path       string
+	Variants   string
+	Features   string
+	InstrClass string
+	RegDiagram string
+}
+
+func NewRecords(file string, insn InsnSection) []Record {
+	var records []Record
+	for _, c := range insn.Classes.IClass {
+		set := make(map[string]bool)
+		for _, e := range c.Encodings {
+			set[e.Docs.Mnemonic()] = true
+		}
+		var names []string
+		for k := range set {
+			names = append(names, k)
+		}
+		records = append(records, Record{
+			File:       file,
+			Name:       strings.Join(names, ";"),
+			IClass:     c.Id,
+			Path:       c.RegDiagram.Name,
+			Variants:   strings.Join(c.ArchVariants.GetVariants(), ";"),
+			Features:   strings.Join(c.ArchVariants.GetFeatures(), ";"),
+			InstrClass: c.Docs.InstrClass(),
+			RegDiagram: c.RegDiagram.String(),
+		})
+	}
+	return records
+}
+
 func main() {
 	base := flag.Bool("base", true, "only consider instructions from the ARMv8.0 instruction set")
 	classes := flag.String("classes", "general,float,fpsimd,advsimd", "comma-separated list of instruction classes")
@@ -351,6 +434,7 @@ func main() {
 	encoding := flag.Bool("encoding", false, "show instruction encodings")
 	rust := flag.String("func", "", "generate rust function with name")
 	variant := flag.String("variant", "", "ISA version")
+	jsonOut := flag.Bool("json", false, "write output as JSON")
 
 	total := 0
 
@@ -364,6 +448,8 @@ func main() {
 	}
 
 	names := make(map[string]bool)
+	var allrecords []Record
+
 	filepath.WalkDir(args[0], func(path string, insn fs.DirEntry, err error) error {
 		if insn != nil && !insn.IsDir() && strings.HasSuffix(path, ".xml") {
 			data, err := os.ReadFile(path)
@@ -407,6 +493,11 @@ func main() {
 					return nil
 				}
 
+				if *jsonOut {
+					allrecords = append(allrecords, NewRecords(filepath.Base(path), insn)...)
+					return nil
+				}
+
 				if *rust != "" {
 					if filepath.Base(path) == "b_cond.xml" {
 						fmt.Print(condbranches)
@@ -419,7 +510,7 @@ func main() {
 						}
 					}
 				} else {
-					fmt.Printf("%s: %s\n", filepath.Base(path), insn.Names())
+					fmt.Printf("%s: %s (%s)\n", filepath.Base(path), insn.Names(), strings.Join(insn.GetClasses(), ";"))
 				}
 
 				total += len(insn.Names())
@@ -433,6 +524,15 @@ func main() {
 		}
 		return nil
 	})
+
+	if *jsonOut {
+		b, err := json.MarshalIndent(allrecords, "", "    ")
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(string(b))
+		return
+	}
 
 	if *rust != "" {
 		fmt.Printf("\t\t_ => false,\n")

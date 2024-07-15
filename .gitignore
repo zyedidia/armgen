@@ -1,2 +1,7 @@
 ISA*
 armgen
+*.ip
+*.png
+/cmd/armclassify/armclassify
+out.txt
+out.json
