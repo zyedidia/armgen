@@ -180,6 +180,10 @@ type IClass struct {
 	Docs         DocVars      `xml:"docvars"`
 }
 
+func (ic IClass) BaseVariant() bool {
+	return len(ic.ArchVariants.Variants) == 0
+}
+
 type Classes struct {
 	XMLName xml.Name `xml:"classes"`
 	IClass  []IClass `xml:"iclass"`
@@ -266,7 +270,7 @@ func (is InsnSection) IsBranch() bool {
 
 func (is InsnSection) BaseVariant() bool {
 	for _, c := range is.Classes.IClass {
-		if len(c.ArchVariants.Variants) != 0 {
+		if !c.BaseVariant() {
 			return false
 		}
 	}
@@ -396,6 +400,7 @@ type Record struct {
 	Features   string
 	InstrClass string
 	RegDiagram string
+	Base       bool
 }
 
 func NewRecords(file string, insn InsnSection) []Record {
@@ -418,6 +423,7 @@ func NewRecords(file string, insn InsnSection) []Record {
 			Features:   strings.Join(c.ArchVariants.GetFeatures(), ";"),
 			InstrClass: c.Docs.InstrClass(),
 			RegDiagram: c.RegDiagram.String(),
+			Base:       c.BaseVariant(),
 		})
 	}
 	return records
